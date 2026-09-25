@@ -32,6 +32,8 @@ class State:
         self.applied = []
 
     def load(self):
+        self.version = 0
+        self.applied = []
         if not os.path.exists(self.path):
             return self
         with open(self.path, "r", encoding="utf-8") as handle:

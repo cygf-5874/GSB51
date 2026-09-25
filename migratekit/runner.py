@@ -118,7 +118,7 @@ def discover_scripts(directory):
     if not os.path.isdir(directory):
         return {}
     found = {}
-    for name in set(os.listdir(directory)):
+    for name in sorted(os.listdir(directory)):
         if not name.endswith(".py") or name.startswith("_"):
             continue
         match = NAME_RE.match(name)
@@ -164,7 +164,8 @@ class Runner:
 
     def pending_steps(self, target=None):
         """待执行步骤，按编号升序。"""
-        steps = self.ordered_steps()
+        applied = {entry["version"] for entry in self.state.applied}
+        steps = [step for step in self.ordered_steps() if step.version not in applied]
         if target is not None:
             steps = [step for step in steps if step.version <= target]
         return steps
@@ -175,6 +176,21 @@ class Runner:
 
     # -- 执行 ---------------------------------------------------------------
 
+    def verify_history(self):
+        """核对已应用步骤的脚本与状态里记的 sha256 是否一致。"""
+        for entry in self.state.applied:
+            step = self.steps.get(entry["file"])
+            if step is None:
+                raise HistoryError("状态里的 %s 在迁移目录里找不到" % entry["file"])
+            if step.sha256 != entry["sha256"]:
+                raise HistoryError(
+                    "已应用的 %s 被改写过：脚本 sha256 与状态里的记录对不上" % entry["file"]
+                )
+
+    def _snapshot(self):
+        """对工作目录做一次字节级快照（迁移脚本目录不参与）。"""
+        return Snapshot(self.workdir, exclude=[self.migrations_dir]).capture()
+
     def up(self, target=None, dry_run=False):
         """执行待执行步骤，返回真正执行了的步数。"""
         steps = self.pending_steps(target)
@@ -182,20 +198,27 @@ class Runner:
             for step in steps:
                 print(step.filename)
             return 0
+        self.verify_history()
         applied = 0
         for step in steps:
-            self.state.applied.append(
-                {
-                    "version": step.version,
-                    "file": step.filename,
-                    "sha256": step.sha256,
-                }
-            )
-            self.state.version = step.version
-            self.state.save()
-            step.load().up(self.ctx)
+            snapshot = self._snapshot()
+            try:
+                step.load().up(self.ctx)
+                self.state.applied.append(
+                    {
+                        "version": step.version,
+                        "file": step.filename,
+                        "sha256": step.sha256,
+                    }
+                )
+                self.state.version = step.version
+                self.state.save()
+            except Exception:
+                snapshot.restore()
+                self.state.load()
+                raise
+            snapshot.discard()
             applied += 1
-        self.state.save()
         return applied
 
     def revert_entries(self, target=None):
@@ -217,18 +240,29 @@ class Runner:
                 print(entry["file"])
             return 0
         if not to_revert:
-            raise MigrateError("没有可回退的迁移")
+            return 0
+        self.verify_history()
         reverted = 0
         for entry in to_revert:
             step = self.steps.get(entry["file"])
             if step is None:
                 raise HistoryError("状态里的 %s 在迁移目录里找不到" % entry["file"])
-            step.load().down(self.ctx)
-            self.state.applied.pop()
-            self.state.version = (
-                self.state.applied[-1]["version"] if self.state.applied else 0
-            )
-            self.state.save()
+            snapshot = self._snapshot()
+            try:
+                step.load().down(self.ctx)
+                self.state.applied.pop()
+                self.state.version = (
+                    self.state.applied[-1]["version"] if self.state.applied else 0
+                )
+                if self.state.applied:
+                    self.state.save()
+                else:
+                    self.state.remove()
+            except Exception:
+                snapshot.restore()
+                self.state.load()
+                raise
+            snapshot.discard()
             reverted += 1
         return reverted
 
