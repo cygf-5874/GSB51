@@ -56,17 +56,22 @@ class Snapshot:
 
     def restore(self):
         """把工作目录还原成 capture() 那一刻的样子。"""
-        keep = set(self.files)
+        keep_files = set(self.files)
+        keep_dirs = set(self.dirs)
         for rel, kind in self._walk():
-            if kind == "file" and rel not in keep:
+            if kind == "file" and rel not in keep_files:
                 os.remove(os.path.join(self.workdir, rel))
-        for rel, kind in sorted(self._walk(), key=lambda item: item[0].count(os.sep), reverse=True):
-            if kind != "dir":
+        for rel, kind in sorted(
+            self._walk(), key=lambda item: item[0].count(os.sep), reverse=True
+        ):
+            if kind != "dir" or rel in keep_dirs:
                 continue
             try:
                 os.rmdir(os.path.join(self.workdir, rel))
             except OSError:
                 pass
+        for rel in sorted(self.dirs):
+            os.makedirs(os.path.join(self.workdir, rel), exist_ok=True)
         for rel in sorted(self.files):
             full = os.path.join(self.workdir, rel)
             parent = os.path.dirname(full)
