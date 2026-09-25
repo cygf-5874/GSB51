@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+.venv/
+venv/
+
+# 迁移引擎跑起来时在工作目录里留下的东西，不进仓库
+/state.json
+/data/
+
+# 日志与临时文件
+*.log
+*.tmp
+out/
+.DS_Store
